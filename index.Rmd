@@ -1,5 +1,5 @@
 ---
-title: "Using machine learning to predicting exercise performance"
+title: "Using machine learning to predict exercise performance"
 author: "Tom Defoe"
 date: "20 December 2015"
 output: html_document
@@ -24,9 +24,9 @@ model that could predict the manner in which participants were likely to
 perform the exercise.
 
 The training and test data required a significant amount of data cleansing and
-pre-processing to enable development of effective models - much of the dataset
+pre-processing to enable development of effective models; much of the dataset
 was unusable due to missing values. After cleaning and pre-processing, model
-development utilised up to 53 covariates - the best models the were estimated to
+development utilised up to 53 covariates. The best models the were estimated to
 have out-of-sample error rates of less than 1%.
 
 Of the models evaluated, those using the Random Forest and C5.0 Decision Tree
@@ -105,7 +105,7 @@ corrMatrix <- cor(trainData[, -ncol(trainData)])
 corrplot(corrMatrix, method = 'shade', order = 'FPC', type = 'lower',tl.cex = 0.7, tl.col = 'black')
 ```
 
-While there is generally low correlation between the predictors, there are a
+While there is generally low correlation between the predictors, a small
 number of variables are highly correlated. Although principal component analysis
 (PCA) could be used to produce a smaller set of uncorrelated variables, the
 decision was taken to preserve interpretability of the model by identifying and
@@ -121,8 +121,8 @@ testCases <- testCases[, -hc_index]
 ```
 
 Finally, while most of the coveriates are relatively well distributed, a number
-of them showed reasonable levels of skew. Therefore, the data was pre-processed
-to make sure it was well centred and scaled.
+of them showed relatively high levels of skew. Therefore, the data was
+pre-processed to make sure it was properly centred and scaled.
 
 ```{r preproc_scale}
 # Center and scale data in the training dataset and test cases
@@ -132,11 +132,11 @@ testCases <- predict(preProcObj, testCases)
 ```
 
 ## Creating the cross-validation datasets
-The training data set was then partitioned into training, test and validation
+The training dataset was then partitioned into training, test and validation
 sets. The training dataset comprised around 50% of the observations, while the
 testing dataset contained round 20% of the observations, and the remaining 30%
-of observations comprised the validation dataset. Each dataset contained 46
-covariates to be used during model development
+of observations comprised the validation dataset. At this point, each partition
+of the data contained 46 covariates that were to be used during model development.
 
 ```{r preproc_sets, echo = FALSE}
 # Set the seed
@@ -162,8 +162,8 @@ were:
 * Random Forest (from the randomforest package)
 * Support Vector Machine (from the e1071 package)
 
-Of these, the C5.0 classifier and Random Forest classifer were found to perform
-very well when evaluated against the testing data.
+Of these, the C5.0 classifier and Random Forest classifier were found to perform
+very well when evaluated against the data from the testing partition.
 
 ## Model 1: Recursive Partition and Regression Trees
 
@@ -192,7 +192,8 @@ The first model implemented a simple tree classifier, using the rpart algorithm
 with the default tuning parameters provided by the caret package. While creation
 of the model is fast, the results are not impressive. The model has an estimated
 accuracy of 54.5% on the partitioned training data and an estimated
-cross-validation error of 53.8% when evaluated using the partitioned testing data.
+cross-validation accuracy of 53.8% when evaluated using the partitioned testing
+data.
 
 ```{r model1_accuracy, echo = FALSE}
 confusionMatrix(testPredict1, testing$classe)$overall
@@ -227,7 +228,8 @@ entropy concepts to produce what are generally considered to be highly accurate
 and reliable classification models. Although 10 boosting iterations were
 requested, the model actually converged after just a single run. The model has
 an estimated accuracy of 100% on the partitioned training data and an estimated
-cross-validation error of 98.7% when evaluated using the partitioned testing data.
+cross-validation accuracy of 98.7% when evaluated using the partitioned testing
+data.
 
 ```{r model2_accuracy, echo = FALSE}
 confusionMatrix(testPredict2, testing$classe)$overall
@@ -261,8 +263,8 @@ predictCases3
 
 The random forest classifier provider by the randomforest package uses a
 bootstrapping technique to create many different trees which each use different
-samples of the data at every split point (with the tuning parameters adopted in
-this study, 500 trees were created in this, with 6 different variables trieds at
+samples of the data at every split point (using the tuning parameters adopted in
+this study, 500 trees were created with 6 different variables tried at
 each split). A majority voting approach is then used to aggregate the different
 trees and create a final result. In general random forests have a high degree of
 predictive power but are computationally expensive, can be prone to overfitting
@@ -300,8 +302,8 @@ Support Vector Machines look to classify outcomes by searching for the optimal
 separating hyper-plane between the classes. They do this by maximizing the
 margin between the classes’ closest points. The e1071 package provides several
 classification algorithms including an interface to the SVM solution developed
-by Chih-Chung Chang and Chih-Jen Lin. This model acheived an estimated accuracy
-of 93.9% on the training partition and 92.5% on the validation partition.
+by Chih-Chung Chang and Chih-Jen Lin in 2001. This model acheived an estimated
+accuracy of 93.9% on the training partition and 92.5% on the validation partition.
 
 ```{r model4_accuracy, echo = FALSE}
 confusionMatrix(testPredict4, testing$classe)$overall
@@ -314,11 +316,9 @@ From the results in the previous section, it can be seen that the C5.0 decision
 tree classifier and random forest algorithm both achieved very good levels of
 accuracy when run against the test partition. While a stacked model that
 combined both algorithms could be developed in an attempt to improve accuracy
-still further, this is probably not necessary in this case.
-
-Instead the random forest algorithm (Model 3) was selected as the final model
-and run against the 20 unlabelled test cases provided. This resulted in the
-following classifications:
+still further, this is probably not necessary in this case. Instead the random
+forest algorithm (Model 3) was selected as the final model and run against the
+20 unlabelled test cases provided. This resulted in the following classifications:
 
 ```{r test_cases}
 predictCases3 <- predict(model3, testCases)
