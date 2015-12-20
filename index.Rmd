@@ -1,22 +1,440 @@
 ---
-title: "Practical Machine Learning Course Project"
+title: "Using machine learning to predicting exercise performance"
 author: "Tom Defoe"
 date: "20 December 2015"
 output: html_document
 ---
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r}
-summary(cars)
+```{r echo = FALSE, messsage = FALSE}
+# load libraries; set document parameters
+suppressMessages(library(caret))
+suppressMessages(library(rpart))
+suppressMessages(library(corrplot))
+suppressMessages(library(rattle))
+suppressMessages(library(randomForest))
+suppressMessages(library(C50))
+suppressMessages(library(e1071))
+suppressMessages(library(gbm))
+options(scipen = 3, digits = 5)
 ```
 
-You can also embed plots, for example:
+# Executive Summary
+A number of different machine learning algorithms were applied to data from the
+[Qualitative Activity Recognition of Weight Lifting Exercises](http://groupware.les.inf.puc-rio.br/har) study in order to develop a
+model that could predict the manner in which participants were likely to
+perform the exercise.
 
-```{r, echo=FALSE}
-plot(cars)
+The training and test data required a significant amount of data cleansing and
+pre-processing to enable development of effective models - much of the dataset
+was unusable due to missing values. After cleaning and pre-processing, model
+development utilised up to 53 covariates - the best models the were estimated to
+have out-of-sample error rates of less than 1%.
+
+Of the models evaluated, those using the Random Forest and C5.0 Decision Tree
+classifiers performed best, with the random forest model achieving a 100%
+success rate when used to classify the provided test cases.
+
+
+# Background
+It is now possible to collect a large amount of data about personal activity
+using devices such as those from Fitbit, Jawbone, Samsung and Apple. This data
+can be analysed to quantify how much of a particular activity people undertake.
+
+This project uses data from accelerometers on the belt, forearm, arm, and
+dumbell of 6 participants in a test study to evaluate how well each participant
+is performing the activity. Each participant was asked to perform barbell lifts
+correctly and incorrectly in 5 different ways. More information about the Weight
+Lifting Exercise Dataset is available from the following webiste: [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har)
+
+The goal of the analysis presented in this paper is to build machine learnning
+algorithms that use this accelerometer data to classify and predict the way in
+which a participant will perform dumbell activities.
+
+# Data Analysis
+## Getting and cleaning the data
+The training and test data was provided as two .csv files, both of which
+contained a large number of missing data points. Since covariates which
+frequently contain missing data are unlikely to be useful predictors, those
+columns containing signficant numbers of NAs were removed from the training
+and testing datasets. Additionally, the decision was taken to remove those
+columns which are used to identify the participant or specific observation since
+they should not form part of a machine learning algorithm.
+
+```{r get_data}
+# Load the training and test case datasets
+rawTrainData <- read.table("pml-training.csv", sep = ",", header = TRUE,
+                           na.strings=c("NA","", "#DIV/0!"))
+rawTestCases <- read.table("pml-testing.csv", sep = ",", header = TRUE,
+                           na.strings=c("NA","", "#DIV/0!"))
+
+# Clean the datasets by removing columns which contain significant numbers of NAs
+total_obs <- nrow(rawTrainData)
+count_na <- apply(rawTrainData, 2, function(x) sum(is.na(x)))
+trainData <- rawTrainData[, which(count_na / total_obs < 0.25)]
+testCases <- rawTestCases[, which(count_na / total_obs < 0.25)]
+
+# Remove those columns which are used to identify rather than describe the observation
+dropColumns <- c('X', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2',
+                 'cvtd_timestamp', 'new_window', 'num_window')
+trainData <- subset(trainData, select = !(names(trainData) %in% dropColumns))
+testCases <- subset(testCases, select = !(names(testCases) %in% dropColumns))
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+## Pre-processing the data
+The resulting datasets still contain 53 different covariates; if possible we
+would like to develop machine learning algorithms that can be run against
+simpler datasets that still capture all of the key information. As a first step,
+the training set was checked for covariates that have little variability.
+However, as it turned out, none of the covariates had near zero variablility and
+so all were retained at this stage.
+
+``` {r preproc_nzv, results = "hide"}
+# Check for covariates with near zero variability
+nsv <- nearZeroVar(trainData, saveMetrics=TRUE)
+sum(nsv$nzv)
+```
+
+The second step looked at the correlation between variables in the training set.
+The following grid shows the correlation between each pair of the predictors in
+the training dataset; darker shaded squares indicate high positive and negative
+correlations.
+
+```{r preproc_corr, fig.width = 8}
+# Plot correlation between variables in the training data
+# Ignore the last column as this contains the classe variable we are predicting
+corrMatrix <- cor(trainData[, -ncol(trainData)])
+corrplot(corrMatrix, method = 'shade', order = 'FPC', type = 'lower',tl.cex = 0.7, tl.col = 'black')
+```
+
+While there is generally low correlation between the predictors, there are a
+number of variables are highly correlated. Although principal component analysis
+(PCA) could be used to produce a smaller set of uncorrelated variables, the
+decision was taken to preserve interpretability of the model by identifying and
+then removing the highly correlated variables. This analysis resulted in removal
+of accel_belt_z, roll_belt, accel_belt_y, accel_belt_x, gyros_dumbbell_x,
+gyros_dumbbell_z, and gyroz_arm_z from the subsequent analysis.
+
+```{r preproc_hcv}
+# Remove highly correlated variables from training dataset and test cases
+hc_index <- findCorrelation(corrMatrix, cutoff = 0.90, names = FALSE)
+trainData <- trainData[, -hc_index]
+testCases <- testCases[, -hc_index]
+```
+
+Finally, while most of the coveriates are relatively well distributed, a number
+of them showed reasonable levels of skew. Therefore, the data was pre-processed
+to make sure it was well centred and scaled.
+
+```{r preproc_scale}
+# Center and scale data in the training dataset and test cases
+preProcObj <- preProcess(trainData, method = c("center", "scale"))
+trainData <- predict(preProcObj, trainData)
+testCases <- predict(preProcObj, testCases)
+```
+
+## Creating the cross-validation datasets
+The training data set was then partitioned into training, test and validation
+sets. The training dataset comprised around 50% of the observations, while the
+testing dataset contained round 20% of the observations, and the remaining 30%
+of observations comprised the validation dataset. Each dataset contained 46
+covariates to be used during model development
+
+```{r preproc_sets, echo = FALSE}
+# Set the seed
+set.seed(1234)
+
+# Partition the training dataset into training, test and validation sets
+buildIndex <- createDataPartition(trainData$classe, p = 0.7, list = FALSE)
+validation <- trainData[-buildIndex, ]
+buildData <- trainData[buildIndex, ]
+
+trainIndex <- createDataPartition(buildData$classe, p = 0.7, list = FALSE)
+training <- buildData[trainIndex, ]
+testing <- buildData[-trainIndex, ]
+```
+
+# Model Development
+Four different models were developed using data from the training partition and
+then cross-validated using data from the testing partition. The models developed
+were:
+
+* Recursive Partitioning and Regression Trees (from the rpart pacakge)
+* C5.0 Decision Tree Classifier (from the C50 package)
+* Random Forest (from the randomforest package)
+* Support Vector Machine (from the e1071 package)
+
+Of these, the C5.0 classifier and Random Forest classifer were found to perform
+very well when evaluated against the testing data.
+
+## Model 1: Recursive Partition and Regression Trees
+
+```{r model1, echo = FALSE, results = "hide", cache = TRUE}
+# MODEL 1: Classification tree using default tuning parameters
+buildStart <- Sys.time()
+model1 <- train(classe ~ ., data = training, method="rpart")
+buildEnd <- Sys.time()
+buildTime1 <- buildEnd - buildStart
+paste("Training time:", buildTime1, "seconds")
+
+trainPredict1 <- predict(model1, training)
+testPredict1 <- predict(model1, testing)
+
+confusionMatrix(trainPredict1, training$classe)$overall
+confusionMatrix(testPredict1, testing$classe)$overall
+confusionMatrix(testPredict1, testing$classe)$table
+# Model has estimated accuracy of 54.5% on training set and 53.8% on testing set
+
+predictCases1 <- predict(model1, testCases)
+predictCases1
+# C C C C C C C C A A D C C A C B C D C B
+```
+
+The first model implemented a simple tree classifier, using the rpart algorithm
+with the default tuning parameters provided by the caret package. While creation
+of the model is fast, the results are not impressive. The model has an estimated
+accuracy of 54.5% on the partitioned training data and an estimated
+cross-validation error of 53.8% when evaluated using the partitioned testing data.
+
+```{r model1_accuracy, echo = FALSE}
+confusionMatrix(testPredict1, testing$classe)$overall
+```
+
+## Model 2: C5.0 Decision Tree Classifier
+
+```{r model2, echo = FALSE, results = "hide", cache = TRUE}
+# MODEL 2: C5.0 Decision Tree Classifier with 10 boosting iterations
+buildStart <- Sys.time()
+model2 <- C5.0(classe ~ ., data = training, trials = 10)
+buildEnd <- Sys.time()
+buildTime2 <- buildEnd - buildStart
+paste("Training time:", buildTime2, "seconds")
+
+trainPredict2 <- predict(model2, training)
+testPredict2 <- predict(model2, testing)
+
+confusionMatrix(trainPredict2, training$classe)$overall
+confusionMatrix(testPredict2, testing$classe)$overall
+confusionMatrix(testPredict2, testing$classe)$table
+# Model has estimated accuracy of 100% on training set and 98.8% on testing set
+
+predictCases2 <- predict(model2, testCases)
+predictCases2
+# B A B A A E D D A A B C B A E E A B B B
+```
+
+The second model implements a C5.0 decision tree classifier with 10 boosting
+iterations, using the c50 package. This statistical classifier uses information
+entropy concepts to produce what are generally considered to be highly accurate
+and reliable classification models. Although 10 boosting iterations were
+requested, the model actually converged after just a single run. The model has
+an estimated accuracy of 100% on the partitioned training data and an estimated
+cross-validation error of 98.7% when evaluated using the partitioned testing data.
+
+```{r model2_accuracy, echo = FALSE}
+confusionMatrix(testPredict2, testing$classe)$overall
+```
+
+
+## Model 3: Random Forest Classifier
+
+```{r model3, echo = FALSE, results = "hide", cache = TRUE}
+# MODEL 3: Random forest using the randomforest package
+buildStart <- Sys.time()
+model3 <- randomForest(classe ~ ., data = training, importance = TRUE)
+buildEnd <- Sys.time()
+buildTime3 <- buildEnd - buildStart
+paste("Training time:", buildTime3, "seconds")
+
+trainPredict3 <- predict(model3, training)
+testPredict3 <- predict(model3, testing)
+
+confusionMatrix(trainPredict3, training$classe)$overall
+confusionMatrix(testPredict3, testing$classe)$overall
+confusionMatrix(testPredict3, testing$classe)$table
+# Model has estimated accuracy of 100% on training set and 99.2% on testing set
+
+# varImp(model3)
+
+predictCases3 <- predict(model3, testCases)
+predictCases3
+# B A B A A E D B A A B C B A E E A B B B
+```
+
+The random forest classifier provider by the randomforest package uses a
+bootstrapping technique to create many different trees which each use different
+samples of the data at every split point (with the tuning parameters adopted in
+this study, 500 trees were created in this, with 6 different variables trieds at
+each split). A majority voting approach is then used to aggregate the different
+trees and create a final result. In general random forests have a high degree of
+predictive power but are computationally expensive, can be prone to overfitting
+and lack interpretability. As anticipated, this model achieved 100% accuracy on
+the training partition and an excellent 99.2% accuracy on the testing partition.
+
+```{r model3_accuracy, echo = FALSE}
+confusionMatrix(testPredict3, testing$classe)$overall
+```
+
+## Model 4: Support Vector Machine
+
+```{r model4, echo = FALSE, results = "hide", cache = TRUE}
+# MODEL 4: Support Vector Machine using the e1071 package
+buildStart <- Sys.time()
+model4 <- svm(classe ~ ., data = training)
+buildEnd <- Sys.time()
+buildTime4 <- buildEnd - buildStart
+paste("Training time:", buildTime4, "seconds")
+
+trainPredict4 <- predict(model4, training)
+testPredict4 <- predict(model4, testing)
+
+confusionMatrix(trainPredict4, training$classe)$overall
+confusionMatrix(testPredict4, testing$classe)$overall
+confusionMatrix(testPredict4, testing$classe)$table
+# Model has estimated accuracy of 93.9% on training set and 92.5% on testing set
+
+predictCases4 <- predict(model4, testCases)
+predictCases4
+# A A A A A E D B A A B C B A E E A B B B
+```
+
+Support Vector Machines look to classify outcomes by searching for the optimal
+separating hyper-plane between the classes. They do this by maximizing the
+margin between the classes’ closest points. The e1071 package provides several
+classification algorithms including an interface to the SVM solution developed
+by Chih-Chung Chang and Chih-Jen Lin. This model acheived an estimated accuracy
+of 93.9% on the training partition and 92.5% on the validation partition.
+
+```{r model4_accuracy, echo = FALSE}
+confusionMatrix(testPredict4, testing$classe)$overall
+```
+
+
+# Test Case Predictions
+
+From the results in the previous section, it can be seen that the C5.0 decision
+tree classifier and random forest algorithm both achieved very good levels of
+accuracy when run against the test partition. While a stacked model that
+combined both algorithms could be developed in an attempt to improve accuracy
+still further, this is probably not necessary in this case.
+
+Instead the random forest algorithm (Model 3) was selected as the final model
+and run against the 20 unlabelled test cases provided. This resulted in the
+following classifications:
+
+```{r test_cases}
+predictCases3 <- predict(model3, testCases)
+predictCases3
+```
+
+
+# Conclusions
+
+The results for the random forest model were very good - its evaluated accuracy
+when run against the partitioned testing data provides an estimated out-of-sample
+error rate of 0.8%. The results for the C5.0 decision tree classifier were also
+good with an estimated out-of-sample error rate of 1.3%. The random forest model
+was used to correctly classify all 20 sample test cases, demonstrating its
+predictive power on this small sample of test cases.
+
+
+\pagebreak
+
+# Appendix 1 - Supporting code
+
+```{r model1_code, eval = FALSE}
+# MODEL 1: Classification tree using default tuning parameters
+buildStart <- Sys.time()
+model1 <- train(classe ~ ., data = training, method="rpart")
+buildEnd <- Sys.time()
+buildTime1 <- buildEnd - buildStart
+paste("Training time:", buildTime1, "seconds")
+
+trainPredict1 <- predict(model1, training)
+testPredict1 <- predict(model1, testing)
+
+confusionMatrix(trainPredict1, training$classe)$overall
+confusionMatrix(testPredict1, testing$classe)$overall
+confusionMatrix(testPredict1, testing$classe)$table
+# Model has estimated accuracy of 54.5% on training set and 53.8% on testing set
+
+predictCases1 <- predict(model1, testCases)
+predictCases1
+# C C C C C C C C A A D C C A C B C D C B
+```
+
+
+
+```{r model2_code, eval = FALSE}
+# MODEL 2: C5.0 Decision Tree Classifier with 10 boosting iterations
+buildStart <- Sys.time()
+model2 <- C5.0(classe ~ ., data = training, trials = 10)
+buildEnd <- Sys.time()
+buildTime2 <- buildEnd - buildStart
+paste("Training time:", buildTime2, "seconds")
+
+trainPredict2 <- predict(model2, training)
+testPredict2 <- predict(model2, testing)
+
+confusionMatrix(trainPredict2, training$classe)$overall
+confusionMatrix(testPredict2, testing$classe)$overall
+confusionMatrix(testPredict2, testing$classe)$table
+# Model has estimated accuracy of 100% on training set and 98.8% on testing set
+
+predictCases2 <- predict(model2, testCases)
+predictCases2
+# B A B A A E D D A A B C B A E E A B B B
+```
+
+
+
+```{r model3_code, eval = FALSE}
+# MODEL 3: Random forest using the randomforest package
+buildStart <- Sys.time()
+model3 <- randomForest(classe ~ ., data = training, importance = TRUE)
+buildEnd <- Sys.time()
+buildTime3 <- buildEnd - buildStart
+paste("Training time:", buildTime3, "seconds")
+
+trainPredict3 <- predict(model3, training)
+testPredict3 <- predict(model3, testing)
+
+confusionMatrix(trainPredict3, training$classe)$overall
+confusionMatrix(testPredict3, testing$classe)$overall
+confusionMatrix(testPredict3, testing$classe)$table
+# Model has estimated accuracy of 100% on training set and 99.2% on testing set
+
+# varImp(model3)
+
+predictCases3 <- predict(model3, testCases)
+predictCases3
+# B A B A A E D B A A B C B A E E A B B B
+```
+
+
+
+```{r model4_code, eval = FALSE}
+# MODEL 4: Support Vector Machine using the e1071 package
+buildStart <- Sys.time()
+model4 <- svm(classe ~ ., data = training)
+buildEnd <- Sys.time()
+buildTime4 <- buildEnd - buildStart
+paste("Training time:", buildTime4, "seconds")
+
+trainPredict4 <- predict(model4, training)
+testPredict4 <- predict(model4, testing)
+
+confusionMatrix(trainPredict4, training$classe)$overall
+confusionMatrix(testPredict4, testing$classe)$overall
+confusionMatrix(testPredict4, testing$classe)$table
+# Model has estimated accuracy of 93.9% on the training set and 92.5% on the validation set
+
+predictCases4 <- predict(model4, testCases)
+predictCases4
+# A A A A A E D B A A B C B A E E A B B B
+```
+
+
+
+
+
+
+
