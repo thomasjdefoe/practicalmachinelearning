@@ -1,11 +1,12 @@
 # JHU Coursera Practical Machine Learning
-## Coursework Repository
+
+## Description
 
 This repository contains the coursework files associated with the *Practical
 Machine Learning* course that forms part of the Data Science Specialisation
 offered by Johns Hopkins University on Coursera.
 
-## Repostiory Contents
+## Contents
 
 <table>
 <tr>
