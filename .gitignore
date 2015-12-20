@@ -1,10 +1,35 @@
-# History files
+# GLOBAL SET-UP FOR MAC OS FILES
+
+# Folder view configuration files
+.DS_Store
+Desktop.ini
+
+# Thumbnail cache files
+._*
+Thumbs.db
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+
+# APPLICATION SPECIFIC FILES
+
+# R history files
 .Rhistory
 .Rapp.history
 
 # RStudio files
 .RData
 .Rproj.user
-
-# Mac OS files
-.DS_Store
