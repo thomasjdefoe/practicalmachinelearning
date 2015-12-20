@@ -1,0 +1,10 @@
+# History files
+.Rhistory
+.Rapp.history
+
+# RStudio files
+.RData
+.Rproj.user
+
+# Mac OS files
+.DS_Store
